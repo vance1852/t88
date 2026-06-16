@@ -33,6 +33,8 @@ func Connect(dsn string) (*gorm.DB, error) {
 
 // Migrate 自动建表。
 func Migrate(database *gorm.DB) error {
+	// 先删除 matches 表（因为 Team1ID/Team2ID 改为 *uint，需要重建外键）
+	database.Migrator().DropTable(&models.Match{})
 	return database.AutoMigrate(
 		&models.User{}, &models.Venue{}, &models.Booking{},
 		&models.Tournament{}, &models.Team{}, &models.TournamentTeam{},

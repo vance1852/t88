@@ -87,8 +87,8 @@ type Match struct {
 	RoundOrder    int       `json:"round_order"`               // 轮次内排序
 	Stage         string    `gorm:"size:16" json:"stage"`      // group | knockout
 	GroupNo       int       `json:"group_no"`                  // 小组编号
-	Team1ID       uint      `json:"team1_id"`
-	Team2ID       uint      `json:"team2_id"`
+	Team1ID       *uint     `json:"team1_id"`                  // 指针类型，支持NULL（队伍未确定时）
+	Team2ID       *uint     `json:"team2_id"`                  // 指针类型，支持NULL（队伍未确定时）
 	Team1Score    int       `json:"team1_score"`
 	Team2Score    int       `json:"team2_score"`
 	VenueID       uint      `gorm:"index" json:"venue_id"`
@@ -97,7 +97,7 @@ type Match struct {
 	EndHour       int       `json:"end_hour"`
 	Status        string    `gorm:"size:16" json:"status"` // unscheduled | scheduled | ongoing | completed | cancelled
 	IsFinal       bool      `json:"is_final"`
-	WinnerID      uint      `json:"winner_id"`
+	WinnerID      *uint     `json:"winner_id"`              // 指针类型，支持NULL
 	Notes         string    `gorm:"size:256" json:"notes"`
 	Team1         Team      `gorm:"foreignKey:Team1ID" json:"team1,omitempty"`
 	Team2         Team      `gorm:"foreignKey:Team2ID" json:"team2,omitempty"`

@@ -2,12 +2,25 @@ package tournament
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"time"
 
 	"venue-booking-admin/internal/models"
 )
+
+// ---------- 辅助函数 ----------
+
+func safeUintMatch(a, b *uint) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
 
 // SchedulingConstraints 排程约束参数。
 type SchedulingConstraints struct {
@@ -225,6 +238,11 @@ func ScheduleOptimized(
 		daysTried := 0
 		maxDaysToTry := 365
 
+		// 占位赛（队伍未确定）跳过约束检查，直接安排最早可用时间
+		isPlaceholder := match.Team1ID == 0 || match.Team2ID == 0
+
+		log.Printf("DEBUG-SCHED: 处理比赛 round=%s team1=%d team2=%d isPlaceholder=%v", match.Round, match.Team1ID, match.Team2ID, isPlaceholder)
+
 		for !scheduled && daysTried < maxDaysToTry {
 			dateStr := currentDate.AddDate(0, 0, daysTried).Format("2006-01-02")
 
@@ -232,7 +250,9 @@ func ScheduleOptimized(
 			for _, venue := range venues {
 				// 检查当天该场地是否还能安排
 				dv := dayVenue{date: dateStr, venueID: venue.ID}
-				if constraints.MaxMatchesPerDay > 0 && venueDayCount[dv] >= constraints.MaxMatchesPerDay {
+				log.Printf("DEBUG-SCHED:   尝试场地=%d 日期=%s venueDayCount=%d MaxMatchesPerDay=%d isPlaceholder=%v", venue.ID, dateStr, venueDayCount[dv], constraints.MaxMatchesPerDay, isPlaceholder)
+				if !isPlaceholder && constraints.MaxMatchesPerDay > 0 && venueDayCount[dv] >= constraints.MaxMatchesPerDay {
+					log.Printf("DEBUG-SCHED:   跳过：场地容量已满")
 					continue
 				}
 
@@ -249,6 +269,7 @@ func ScheduleOptimized(
 				candidateStart := earliestStart
 
 				for _, slot := range daySlots {
+					log.Printf("DEBUG-SCHED:   已有时段 %d-%d", slot.start, slot.end)
 					// 候选时间需要包含转换缓冲
 					if candidateStart+constraints.MatchDuration+constraints.TransitionBuff <= slot.start {
 						// 这个空当可以安排
@@ -264,12 +285,15 @@ func ScheduleOptimized(
 				if latestEnd > venue.CloseHour {
 					latestEnd = venue.CloseHour
 				}
+				log.Printf("DEBUG-SCHED:   candidateStart=%d candidateEnd=%d latestEnd=%d", candidateStart, candidateEnd, latestEnd)
 				if candidateEnd > latestEnd {
+					log.Printf("DEBUG-SCHED:   跳过：超出开放时间")
 					continue
 				}
 
 				// 检查队伍是否背靠背（连续两天或同一天有比赛）
-				if constraints.NoBackToBack {
+				// 占位赛不检查背靠背（队伍未确定）
+				if !isPlaceholder && constraints.NoBackToBack {
 					backToBack := false
 					matchDate, _ := time.Parse("2006-01-02", dateStr)
 					if match.Team1ID > 0 {
@@ -291,15 +315,26 @@ func ScheduleOptimized(
 						}
 					}
 					if backToBack {
+						log.Printf("DEBUG-SCHED:   跳过：背靠背")
 						continue
 					}
 				}
 
+				log.Printf("DEBUG-SCHED:   安排成功！时段 %d-%d", candidateStart, candidateEnd)
 				// 可以安排
+				// 转换 uint 到 *uint，0 值转为 nil（避免外键约束）
+				var t1ID *uint
+				var t2ID *uint
+				if match.Team1ID > 0 {
+					t1ID = &match.Team1ID
+				}
+				if match.Team2ID > 0 {
+					t2ID = &match.Team2ID
+				}
 				result.Matches = append(result.Matches, models.Match{
 					ID:         match.ID,
-					Team1ID:    match.Team1ID,
-					Team2ID:    match.Team2ID,
+					Team1ID:    t1ID,
+					Team2ID:    t2ID,
 					Stage:      match.Stage,
 					Round:      match.Round,
 					RoundOrder: match.RoundOrder,
@@ -406,10 +441,19 @@ func ScheduleGreedy(
 		}
 
 		dateStr := currentDate.Format("2006-01-02")
+		// 转换 uint 到 *uint，0 值转为 nil（避免外键约束）
+		var t1ID *uint
+		var t2ID *uint
+		if match.Team1ID > 0 {
+			t1ID = &match.Team1ID
+		}
+		if match.Team2ID > 0 {
+			t2ID = &match.Team2ID
+		}
 		result.Matches = append(result.Matches, models.Match{
 			ID:         match.ID,
-			Team1ID:    match.Team1ID,
-			Team2ID:    match.Team2ID,
+			Team1ID:    t1ID,
+			Team2ID:    t2ID,
 			Stage:      match.Stage,
 			Round:      match.Round,
 			RoundOrder: match.RoundOrder,
@@ -483,7 +527,8 @@ func ValidateMatchConstraints(
 			if m.ID == match.ID || m.Status == "cancelled" {
 				continue
 			}
-			if m.Team1ID != team1 && m.Team2ID != team1 && m.Team1ID != team2 && m.Team2ID != team2 {
+			if !safeUintMatch(m.Team1ID, team1) && !safeUintMatch(m.Team2ID, team1) &&
+				!safeUintMatch(m.Team1ID, team2) && !safeUintMatch(m.Team2ID, team2) {
 				continue
 			}
 			mDate, _ := time.Parse("2006-01-02", m.MatchDate)

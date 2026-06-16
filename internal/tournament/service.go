@@ -214,15 +214,19 @@ func UpdateStandings(db *gorm.DB, match models.Match) error {
 	}
 
 	// 更新Team1积分
-	if err := updateTeamStanding(db, match.TournamentID, match.GroupNo, match.Team1ID,
-		match.Team1Score, match.Team2Score, points1); err != nil {
-		return err
+	if match.Team1ID != nil {
+		if err := updateTeamStanding(db, match.TournamentID, match.GroupNo, *match.Team1ID,
+			match.Team1Score, match.Team2Score, points1); err != nil {
+			return err
+		}
 	}
 
 	// 更新Team2积分
-	if err := updateTeamStanding(db, match.TournamentID, match.GroupNo, match.Team2ID,
-		match.Team2Score, match.Team1Score, points2); err != nil {
-		return err
+	if match.Team2ID != nil {
+		if err := updateTeamStanding(db, match.TournamentID, match.GroupNo, *match.Team2ID,
+			match.Team2Score, match.Team1Score, points2); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -319,8 +323,10 @@ func PromoteToKnockout(db *gorm.DB, tournamentID uint, groupCount int, knockoutC
 		team1Idx := i * 2
 		team2Idx := i*2 + 1
 		if team2Idx < len(allQualified) && i < len(knockoutMatches) {
-			knockoutMatches[i].Team1ID = allQualified[team1Idx]
-			knockoutMatches[i].Team2ID = allQualified[team2Idx]
+			t1 := allQualified[team1Idx]
+			t2 := allQualified[team2Idx]
+			knockoutMatches[i].Team1ID = &t1
+			knockoutMatches[i].Team2ID = &t2
 			if err := db.Save(&knockoutMatches[i]).Error; err != nil {
 				return err
 			}
@@ -332,7 +338,7 @@ func PromoteToKnockout(db *gorm.DB, tournamentID uint, groupCount int, knockoutC
 
 // AdvanceKnockout 淘汰赛晋级：比赛结束后，胜者进入下一轮。
 func AdvanceKnockout(db *gorm.DB, match models.Match) error {
-	if match.Stage != "knockout" || match.Status != "completed" || match.WinnerID == 0 {
+	if match.Stage != "knockout" || match.Status != "completed" || match.WinnerID == nil {
 		return nil
 	}
 
@@ -405,12 +411,12 @@ func AdvanceKnockout(db *gorm.DB, match models.Match) error {
 		nextMatch := nextMatches[nextMatchIdx]
 		if matchPos%2 == 0 {
 			// 上半区胜者 -> Team1
-			if nextMatch.Team1ID == 0 {
+			if nextMatch.Team1ID == nil {
 				nextMatch.Team1ID = match.WinnerID
 			}
 		} else {
 			// 下半区胜者 -> Team2
-			if nextMatch.Team2ID == 0 {
+			if nextMatch.Team2ID == nil {
 				nextMatch.Team2ID = match.WinnerID
 			}
 		}

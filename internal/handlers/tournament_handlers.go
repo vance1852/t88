@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +11,18 @@ import (
 	"venue-booking-admin/internal/models"
 	"venue-booking-admin/internal/tournament"
 )
+
+// ---------- 辅助函数 ----------
+
+func safeUintEqual(a, b *uint) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
 
 // ---------- 赛事管理 ----------
 
@@ -372,6 +385,19 @@ func (h *Handler) GenerateSchedule(c *gin.Context) {
 		return
 	}
 
+	log.Printf("DEBUG: 传入 matches=%d, result.Matches=%d", len(scheduledMatches), len(result.Matches))
+	for i, m := range result.Matches {
+		t1 := uint(0)
+		if m.Team1ID != nil {
+			t1 = *m.Team1ID
+		}
+		t2 := uint(0)
+		if m.Team2ID != nil {
+			t2 = *m.Team2ID
+		}
+		log.Printf("DEBUG: Match[%d] round=%s team1=%d team2=%d venue=%d date=%s", i, m.Round, t1, t2, m.VenueID, m.MatchDate)
+	}
+
 	// 保存到数据库
 	tx := h.DB.Begin()
 
@@ -381,6 +407,8 @@ func (h *Handler) GenerateSchedule(c *gin.Context) {
 	tx.Where("tournament_id = ?", tournamentID).Delete(&models.GroupStanding{})
 
 	for _, m := range result.Matches {
+		// 占位赛（队伍未确定）也需要保存，只是不创建场地占用
+		// 等队伍确定后，再更新场地和时间
 		match := models.Match{
 			TournamentID: uint(tournamentID),
 			Round:        m.Round,
@@ -574,8 +602,9 @@ func (h *Handler) UpdateMatch(c *gin.Context) {
 // ---------- 比分录入与晋级 ----------
 
 type scoreReq struct {
-	Team1Score int `json:"team1_score" binding:"required"`
-	Team2Score int `json:"team2_score" binding:"required"`
+	Team1Score int  `json:"team1_score" binding:"min=0"`
+	Team2Score int  `json:"team2_score" binding:"min=0"`
+	WinnerID   *uint `json:"winner_id"`
 }
 
 func (h *Handler) RecordScore(c *gin.Context) {
@@ -600,6 +629,12 @@ func (h *Handler) RecordScore(c *gin.Context) {
 		match.WinnerID = match.Team1ID
 	} else if req.Team2Score > req.Team1Score {
 		match.WinnerID = match.Team2ID
+	} else if req.WinnerID != nil {
+		// 平局时，显式指定胜者（用于淘汰赛加时/点球）
+		match.WinnerID = req.WinnerID
+	} else if match.Stage == "knockout" {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"detail": "淘汰赛平局必须指定胜者"})
+		return
 	}
 
 	tx := h.DB.Begin()
@@ -737,6 +772,43 @@ func (h *Handler) DetectConflicts(c *gin.Context) {
 
 // ---------- 统计 ----------
 
+type promoteReq struct {
+	GroupCount   int `json:"group_count" binding:"required,min=1"`
+	KnockoutCount int `json:"knockout_count" binding:"required,min=1"`
+}
+
+func (h *Handler) PromoteToKnockout(c *gin.Context) {
+	tournamentID, _ := strconv.Atoi(c.Param("id"))
+
+	var t models.Tournament
+	if err := h.DB.First(&t, tournamentID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "赛事不存在"})
+		return
+	}
+
+	if t.Format != "group_knockout" {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "只有小组+淘汰赛制才能晋级"})
+		return
+	}
+
+	var req promoteReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"detail": "请求参数不合法"})
+		return
+	}
+
+	tx := h.DB.Begin()
+	err := tournament.PromoteToKnockout(tx, uint(tournamentID), req.GroupCount, req.KnockoutCount)
+	if err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+	tx.Commit()
+
+	c.JSON(http.StatusOK, gin.H{"message": "晋级成功"})
+}
+
 func (h *Handler) GetTournamentStats(c *gin.Context) {
 	tournamentID, _ := strconv.Atoi(c.Param("id"))
 
@@ -803,8 +875,8 @@ func (h *Handler) GetScheduleConflictReport(c *gin.Context) {
 			}
 
 			// 检查队伍背靠背
-			if m1.Team1ID == m2.Team1ID || m1.Team1ID == m2.Team2ID ||
-				m1.Team2ID == m2.Team1ID || m1.Team2ID == m2.Team2ID {
+			if safeUintEqual(m1.Team1ID, m2.Team1ID) || safeUintEqual(m1.Team1ID, m2.Team2ID) ||
+				safeUintEqual(m1.Team2ID, m2.Team1ID) || safeUintEqual(m1.Team2ID, m2.Team2ID) {
 				d1, _ := parseDate(m1.MatchDate)
 				d2, _ := parseDate(m2.MatchDate)
 				diff := d1.Sub(d2).Hours()

@@ -77,6 +77,7 @@ func main() {
 			// 赛程编排
 			secured.POST("/tournaments/:id/generate-schedule", h.GenerateSchedule)
 			secured.GET("/tournaments/:id/standings", h.GetGroupStandings)
+			secured.POST("/tournaments/:id/promote-to-knockout", h.PromoteToKnockout)
 			secured.GET("/tournaments/:id/stats", h.GetTournamentStats)
 			secured.GET("/tournaments/:id/conflict-report", h.GetScheduleConflictReport)
 			secured.POST("/tournaments/:id/detect-conflicts", h.DetectConflicts)
